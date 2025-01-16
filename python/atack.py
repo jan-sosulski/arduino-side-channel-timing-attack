@@ -1,69 +1,117 @@
 import serial
 import time
-import statistics
+import csv
+import numpy as np
+from tqdm import tqdm
 
-# Połączenie z Arduino przez port szeregowy (dostosuj port)
-arduino = serial.Serial('COM3', 9600, timeout=1)  # Zmień 'COM3' na odpowiedni port
+MODULUS = 3233
+PUBLIC_KEY = 17
+MAX_BITS = 9
 
-# Funkcja do wysyłania ciphertextu do Arduino i odbierania odpowiedzi
-def send_to_arduino(ciphertext):
-    arduino.write(f"{ciphertext}\n".encode())  # Wysyła ciphertext do Arduino
-    start_time = time.time()  # Zaczynaj mierzyć czas
-    response = arduino.readline().decode().strip()  # Odbiera odpowiedź (odszyfrowaną wiadomość)
-    end_time = time.time()  # Kończymy mierzenie czasu
-    response_time = end_time - start_time  # Oblicz czas odpowiedzi
-    return response, response_time
 
-# Funkcja przeprowadzająca atak czasowy na RSA
-def timing_attack(n, num_trials=100):
-    response_times = {}  # Słownik do przechowywania czasów odpowiedzi
+def modular_exponentiation(base: int, exp: int, flag: int):
+    ans = 1
+    for i in range(32):
+        if i > flag:
+            return ans % MODULUS
+        if (exp >> i) & 1:
+            ans = (ans * base) % MODULUS
+        base = (base * base) % MODULUS
+    return ans % MODULUS
 
-    # Przeprowadzamy atak na różne ciphertexty
-    for trial in range(num_trials):
-        print(f"Trial {trial + 1}/{num_trials}")
-        
-        # Testujemy różne ciphertexty (tutaj zakładając, że są małe liczby)
-        for i in range(1, n):
-            print(f"Testing ciphertext: {i}")
-            response, response_time = send_to_arduino(i)  # Wysyłamy do Arduino i otrzymujemy czas odpowiedzi
 
-            # Zapisujemy czas odpowiedzi dla każdego ciphertextu
-            if i not in response_times:
-                response_times[i] = []
-            response_times[i].append(response_time)
+def measure_time(serial_port, message):
+    """Send a message to Arduino and measure the response time."""
+    start_time = time.time()
+    serial_port.write(f"{message}\n".encode())
+    response = serial_port.readline().decode().strip()
+    elapsed_time = time.time() - start_time
+    return float(response), elapsed_time
 
-    # Obliczamy średnie i odchylenie standardowe czasów odpowiedzi dla każdego ciphertextu
-    avg_response_times = {}
-    std_dev_response_times = {}
-    
-    for ciphertext, times in response_times.items():
-        avg_response_times[ciphertext] = statistics.mean(times)
-        std_dev_response_times[ciphertext] = statistics.stdev(times) if len(times) > 1 else 0
 
-    # Określamy próg na podstawie średnich czasów odpowiedzi
-    avg_time = statistics.mean(avg_response_times.values())
-    std_dev_time = statistics.stdev(avg_response_times.values()) if len(avg_response_times) > 1 else 0
-    threshold = avg_time + std_dev_time  # Proporcja do średniego czasu odpowiedzi
-    
-    print(f"\nCalculated threshold: {threshold:.6f} seconds (mean + stddev)")
+def remove_outliers(data):
+    """Remove outliers from a list of data using 2 standard deviations."""
+    mean = np.mean(data)
+    std_dev = np.std(data)
+    return [x for x in data if (mean - 2 * std_dev) < x < (mean + 2 * std_dev)]
 
-    # Analizujemy czasy odpowiedzi i próbujemy odgadnąć bity klucza
-    potential_private_key = []
-    for i in range(1, n):
-        avg_time_for_cipher = avg_response_times[i]
-        if avg_time_for_cipher > threshold:  # Jeśli czas jest większy od progu, to przypisujemy bit 1
-            potential_private_key.append(1)
-        else:
-            potential_private_key.append(0)
 
-    # Rekonstrukcja klucza prywatnego
-    print("Reconstructed private key bits:")
-    reconstructed_key = ''.join(map(str, potential_private_key))
-    print(f"Private key (approx.): {reconstructed_key}")
+def generate_simulation_data(serial_port):
+    """Generate timing data for the encryption process."""
+    with open("simulations.csv", 'w', newline='') as csv_file:
+        csv_writer = csv.writer(csv_file)
+        for message in tqdm(range(1, 10000), desc="Generating Simulation Data"):
+            _, time_elapsed = measure_time(serial_port, f"{message}")
+            csv_writer.writerow([time_elapsed])
 
-# Zakładając publiczny klucz (e, n)
-n = 3233  # Modulus (n = p * q dla prostych p i q)
-e = 17    # Publiczny eksponent (często używany w RSA)
 
-# Uruchomienie ataku
-timing_attack(n, num_trials=2)
+def deduce_key_bits(serial_port):
+    """Deduce key bits based on variance analysis."""
+    one_list = []
+    zero_list = []
+
+    # Timing for guessed bit 1
+    for message in tqdm(range(1, 10000), desc="Analyzing guessed bit 1"):
+        for _ in range(50):  # Increased measurements for more accuracy
+            _, time_elapsed = measure_time(serial_port, f"{message}")
+            one_list.append(time_elapsed)
+
+    # Timing for guessed bit 0
+    for message in tqdm(range(1, 10000), desc="Analyzing guessed bit 0"):
+        for _ in range(50):  # Increased measurements for more accuracy
+            _, time_elapsed = measure_time(serial_port, f"{message}")
+            zero_list.append(time_elapsed)
+
+    one_list = remove_outliers(one_list)
+    zero_list = remove_outliers(zero_list)
+
+    with open("simulations.csv", 'r') as sim:
+        siml = list(csv.reader(sim))
+        if len(siml) != len(one_list) or len(siml) != len(zero_list):
+            raise ValueError(
+                "Simulation data size mismatch: Ensure 'simulations.csv' has the correct number of rows."
+            )
+
+        for i in range(len(siml)):
+            one_list[i] = float(siml[i][0]) - one_list[i]
+            zero_list[i] = float(siml[i][0]) - zero_list[i]
+
+    zero_variance = np.var(zero_list)
+    one_variance = np.var(one_list)
+
+    print("Zero's Variance =", zero_variance)
+    print("One's Variance =", one_variance)
+
+    return 0 if zero_variance < one_variance else 1
+
+
+def kocher_attack(serial_port, max_bits):
+    """Perform Kocher's Timing Attack to deduce the private key."""
+    guessed_key = []
+
+    for bit_position in tqdm(range(max_bits), desc="Kocher's Timing Attack"):
+        print(f"Analyzing bit {bit_position + 1}...")
+        key_bit = deduce_key_bits(serial_port)
+        guessed_key.append(key_bit)
+        print(f"Bit {bit_position + 1}: {key_bit}")
+
+    private_key = int(''.join(map(str, guessed_key)), 2)
+    print(f"Guessed Private Key: {private_key}")
+    return private_key
+
+
+if __name__ == "__main__":
+    SERIAL_PORT = "COM5"  # Replace with your Arduino's serial port
+    BAUD_RATE = 9600
+
+    try:
+        with serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=1) as arduino:
+            time.sleep(2)  # Allow Arduino to reset
+            print("Generating simulation data...")
+            generate_simulation_data(arduino)
+
+            print("Starting Kocher's Timing Attack...")
+            guessed_key = kocher_attack(arduino, MAX_BITS)
+            print(f"Deduced Private Key: {guessed_key}")
+    except Exception as e:
+        print(f"Error: {e}")

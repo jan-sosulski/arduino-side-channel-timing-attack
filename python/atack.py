@@ -102,7 +102,7 @@ def kocher_attack(serial_port, max_bits):
 
 if __name__ == "__main__":
     SERIAL_PORT = "COM5"  # Replace with your Arduino's serial port
-    BAUD_RATE = 9600
+    BAUD_RATE = 115200
 
     try:
         with serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=1) as arduino:

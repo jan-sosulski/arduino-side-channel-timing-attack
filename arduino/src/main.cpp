@@ -12,7 +12,7 @@ void loop() {
         input.trim();
 
         unsigned long message = input.toInt();
-        unsigned long encryptedMessage = encrypt(message);
-        Serial.println(encryptedMessage);
+        unsigned long decryptedMessage = decrypt(message);
+        Serial.println(decryptedMessage);
     }
 }

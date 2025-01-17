@@ -6,7 +6,10 @@ from tqdm import tqdm
 
 MODULUS = 3233
 PUBLIC_KEY = 17
-MAX_BITS = 9
+MAX_BITS = 6
+MEASUREMENTS = 1  # Number of measurements for each message
+SIM_ROWS = 100000  # Number of rows in the simulation data
+SIM_MAX_AGE = 3600  # Maximum age of the simulation data in seconds
 
 
 def modular_exponentiation(base: int, exp: int, flag: int):
@@ -22,10 +25,10 @@ def modular_exponentiation(base: int, exp: int, flag: int):
 
 def measure_time(serial_port, message):
     """Send a message to Arduino and measure the response time."""
-    start_time = time.time()
+    start_time = time.time_ns()
     serial_port.write(f"{message}\n".encode())
     response = serial_port.readline().decode().strip()
-    elapsed_time = time.time() - start_time
+    elapsed_time = time.time_ns() - start_time
     return float(response), elapsed_time
 
 
@@ -36,13 +39,30 @@ def remove_outliers(data):
     return [x for x in data if (mean - 2 * std_dev) < x < (mean + 2 * std_dev)]
 
 
-def generate_simulation_data(serial_port):
-    """Generate timing data for the encryption process."""
+def generate_simulation_data(serial_port, max_age_seconds=SIM_MAX_AGE):
+    """Generate timing data for the encryption process if not already available or outdated."""
+    import os
+    import time
+
+    if os.path.exists("simulations.csv"):
+        file_age = time.time() - os.path.getmtime("simulations.csv")
+        if file_age < max_age_seconds:
+            with open("simulations.csv", 'r') as sim_file:
+                rows = list(csv.reader(sim_file))
+                if len(rows) == SIM_ROWS:
+                    print("Simulation data is recent and consistent. Skipping generation.")
+                    return
+        print("Simulation data is outdated or incomplete. Regenerating...")
+
+    print("Generating simulation data...")
     with open("simulations.csv", 'w', newline='') as csv_file:
         csv_writer = csv.writer(csv_file)
-        for message in tqdm(range(1, 10000), desc="Generating Simulation Data"):
-            _, time_elapsed = measure_time(serial_port, f"{message}")
-            csv_writer.writerow([time_elapsed])
+        for message in tqdm(range(SIM_ROWS), desc="Generating Simulation Data"):
+            try:
+                _, time_elapsed = measure_time(serial_port, f"{message}")
+                csv_writer.writerow([time_elapsed])
+            except Exception as e:
+                print(f"Error during data generation for message {message}: {e}")
 
 
 def deduce_key_bits(serial_port):
@@ -51,26 +71,26 @@ def deduce_key_bits(serial_port):
     zero_list = []
 
     # Timing for guessed bit 1
-    for message in tqdm(range(1, 10000), desc="Analyzing guessed bit 1"):
-        for _ in range(50):  # Increased measurements for more accuracy
+    for message in tqdm(range(SIM_ROWS), desc="Analyzing guessed bit 1"):
+        for _ in range(MEASUREMENTS):
             _, time_elapsed = measure_time(serial_port, f"{message}")
             one_list.append(time_elapsed)
 
     # Timing for guessed bit 0
-    for message in tqdm(range(1, 10000), desc="Analyzing guessed bit 0"):
-        for _ in range(50):  # Increased measurements for more accuracy
+    for message in tqdm(range(SIM_ROWS), desc="Analyzing guessed bit 0"):
+        for _ in range(MEASUREMENTS):
             _, time_elapsed = measure_time(serial_port, f"{message}")
             zero_list.append(time_elapsed)
 
-    one_list = remove_outliers(one_list)
-    zero_list = remove_outliers(zero_list)
+    # one_list = remove_outliers(one_list)
+    # zero_list = remove_outliers(zero_list)
 
     with open("simulations.csv", 'r') as sim:
         siml = list(csv.reader(sim))
-        if len(siml) != len(one_list) or len(siml) != len(zero_list):
-            raise ValueError(
-                "Simulation data size mismatch: Ensure 'simulations.csv' has the correct number of rows."
-            )
+        if len(siml) != SIM_ROWS:
+            print(f"Expected {SIM_ROWS} rows, found {len(siml)}. Regenerating data...")
+            generate_simulation_data(serial_port)
+            return deduce_key_bits(serial_port)
 
         for i in range(len(siml)):
             one_list[i] = float(siml[i][0]) - one_list[i]
@@ -85,15 +105,25 @@ def deduce_key_bits(serial_port):
     return 0 if zero_variance < one_variance else 1
 
 
+
 def kocher_attack(serial_port, max_bits):
     """Perform Kocher's Timing Attack to deduce the private key."""
     guessed_key = []
 
-    for bit_position in tqdm(range(max_bits), desc="Kocher's Timing Attack"):
-        print(f"Analyzing bit {bit_position + 1}...")
-        key_bit = deduce_key_bits(serial_port)
-        guessed_key.append(key_bit)
-        print(f"Bit {bit_position + 1}: {key_bit}")
+    with open("kocher_results.csv", 'w', newline='') as result_file:
+        csv_writer = csv.writer(result_file)
+        csv_writer.writerow(["Bit Position", "Guessed Bit"])
+
+        for bit_position in tqdm(range(max_bits), desc="Kocher's Timing Attack"):
+            print(f"Analyzing bit {bit_position + 1}...")
+            key_bit = deduce_key_bits(serial_port)
+            guessed_key.append(key_bit)
+
+            # Save progress after each bit
+            csv_writer.writerow([bit_position + 1, key_bit])
+            result_file.flush()
+
+            print(f"Bit {bit_position + 1}: {key_bit}")
 
     private_key = int(''.join(map(str, guessed_key)), 2)
     print(f"Guessed Private Key: {private_key}")
@@ -105,8 +135,8 @@ if __name__ == "__main__":
     BAUD_RATE = 115200
 
     try:
-        with serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=1) as arduino:
-            time.sleep(2)  # Allow Arduino to reset
+        with serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=2) as arduino:
+            time.sleep(4)  # Allow Arduino to reset
             print("Generating simulation data...")
             generate_simulation_data(arduino)
 

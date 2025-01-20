@@ -5,6 +5,9 @@
 		},
 		{
 			"path": "python"
+		},
+		{
+			"path": "stm"
 		}
 	],
 	"settings": {}

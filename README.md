@@ -19,7 +19,7 @@ Arduino side channel timing attack/
 - **stm/**: STM32L476RG-based high-resolution timer module designed for precise time measurement and pulse width analysis.
 
 ## Attack Process
-1. **Deploy the Arduino code**: Upload the Arduino code to the target device.
+1. **Deploy the Arduino code**: Upload the Arduino code to the target device. We use PlatformIO to upload the code to the Arduino.
 
 2. **Use STM as a high-resolution timer**: Connect the STM32L476RG to the target device output pin and use it as a high-resolution timer. REMEMBER that arduino works at 5V and STM32L476RG works at 3.3V. Use a voltage divider to connect the output pin to the STM32L476RG. You can also connect diode to the output pin to see when messages are sent.
 
